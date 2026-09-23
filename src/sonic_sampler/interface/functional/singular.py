@@ -26,6 +26,7 @@ from sonic_sampler.interface.base import TopKStrategy
 from sonic_sampler.interface.dispatch import TwoStageWarpConfig
 from sonic_sampler.interface.functional.base import (
     validate_count_update,
+    validate_noise,
     resolve_scratchpad,
     conditional_stride,
     resolve_block,
@@ -35,9 +36,9 @@ from sonic_sampler.ops.prologue import bitpacked_reduction_kernel
 from sonic_sampler.ops.singular import cumulative_selection_kernel
 
 
-def resolve_gumbel(noise: Tensor | None, logits: Tensor) -> Tensor:
+def resolve_gumbel(noise: Tensor | None, logits: Tensor, seeds: Tensor | None) -> Tensor | None:
 
-    if (weights := noise) is None:
+    if (weights := noise) is None and seeds is None:
 
         weights = (
             torch.empty_like(logits)
@@ -111,6 +112,8 @@ def fused_singular(
     # Selection Parameter(s).
     top_k_logprobs: Tensor | None = None,
     gumbel_noise: Tensor | None = None,
+    noise_seeds: Tensor | None = None,
+    noise_offsets: Tensor | None = None,
     # Output Buffer(s).
     output_tokens: Tensor | None = None,
     draft_probabilities: Tensor | None = None,
@@ -122,6 +125,7 @@ def fused_singular(
     # Validation(s).
 
     validate_count_update(update_counts, decode_counts)
+    validate_noise(noise_seeds, noise_offsets, gumbel_noise)
 
     # Extract and resolve batch size, local vocab size(s), and shard offset(s).
 
@@ -154,7 +158,7 @@ def fused_singular(
 
     # Resolve gumbel noise weight(s).
 
-    gumbel_weights = resolve_gumbel(gumbel_noise, logits)
+    gumbel_weights = resolve_gumbel(gumbel_noise, logits, noise_seeds)
 
     # Resolve output buffer(s).
 
@@ -193,7 +197,7 @@ def fused_singular(
     stride_x = logits.stride(0)
     stride_y = bitpacked.stride(0)
 
-    stride_n = gumbel_weights.stride(0)
+    stride_n = conditional_stride(gumbel_weights)
     stride_f = final_tokens.stride(0)
 
     stride_g = conditional_stride(grammar)
@@ -265,6 +269,8 @@ def fused_singular(
         d2t_mapping,
         decode_counts,
         gumbel_weights,
+        noise_seeds,
+        noise_offsets,
         top_k,
         top_p,
         min_p,

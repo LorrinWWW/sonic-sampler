@@ -38,6 +38,21 @@ def validate_count_update(flag: bool, buffer: Tensor | None) -> None:
         raise ValueError("`update_counts` is True but `decode_counts` is None")
 
 
+def validate_noise(
+    seeds: Tensor | None,
+    offsets: Tensor | None,
+    *weights: Tensor | None,
+) -> None:
+
+    if (seeds is None) != (offsets is None):
+
+        raise ValueError("`noise_seeds` and `noise_offsets` must be given together")
+
+    if seeds is not None and any(weight is not None for weight in weights):
+
+        raise ValueError("`noise_seeds` replaces the noise weights, which must be None")
+
+
 def resolve_scratchpad(
     logits: Tensor,
     block_n: int,

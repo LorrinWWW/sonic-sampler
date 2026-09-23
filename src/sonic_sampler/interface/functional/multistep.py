@@ -33,6 +33,7 @@ from sonic_sampler.interface.functional.base import (
     resolve_block,
     resolve_scratchpad,
     validate_count_update,
+    validate_noise,
 )
 from sonic_sampler.interface.base import TopKStrategy
 from sonic_sampler.interface.dispatch import ThreeStageWarpConfig
@@ -130,9 +131,10 @@ def resolve_gumbel(
     logits: Tensor,
     batch_size: int,
     timesteps: int,
-) -> Tensor:
+    seeds: Tensor | None,
+) -> Tensor | None:
 
-    if (weights := noise) is None:
+    if (weights := noise) is None and seeds is None:
 
         weights = (
             logits.new_empty((batch_size, timesteps, logits.size(-1)))
@@ -148,9 +150,10 @@ def resolve_uniform(
     logits: Tensor,
     batch_size: int,
     lookahead: int,
-) -> Tensor:
+    seeds: Tensor | None,
+) -> Tensor | None:
 
-    if (weights := noise) is None:
+    if (weights := noise) is None and seeds is None:
 
         weights = (
             logits.new_empty((batch_size, lookahead))
@@ -158,6 +161,27 @@ def resolve_uniform(
         )
 
     return weights
+
+
+def resolve_target_stride(
+    gumbel: Tensor | None,
+    probabilities: Tensor | None,
+    counts: Tensor | None,
+    bias: Tensor | None,
+    target_vocab: int,
+) -> int:
+
+    if gumbel is not None:
+
+        return collapse_2d(gumbel).stride(0)
+
+    if probabilities is not None:
+
+        return probabilities.stride(1)
+
+    stride = conditional_stride(counts, bias)
+
+    return target_vocab if stride is None else stride
 
 
 def resolve_tokens(drafted: Tensor, output: Tensor | None) -> Tensor:
@@ -213,6 +237,8 @@ def fused_multistep(
     top_k_logprobs: Tensor | None = None,
     gumbel_noise: Tensor | None = None,
     uniform_noise: Tensor | None = None,
+    noise_seeds: Tensor | None = None,
+    noise_offsets: Tensor | None = None,
     # Output Buffer(s).
     output_tokens: Tensor | None = None,
     # Top-K Strategy & Tuning Configuration.
@@ -223,6 +249,7 @@ def fused_multistep(
     # Validation(s).
 
     validate_count_update(update_counts, decode_counts)
+    validate_noise(noise_seeds, noise_offsets, gumbel_noise, uniform_noise)
 
     # Resolve batch size, lookahead, varlen, and vocab size.
 
@@ -271,8 +298,8 @@ def fused_multistep(
 
     # Resolve gumbel noise weight(s).
 
-    gumbel_weights = resolve_gumbel(gumbel_noise, logits, batch_size, gamma + 1)
-    uniform_weights = resolve_uniform(uniform_noise, logits, batch_size, gamma)
+    gumbel_weights = resolve_gumbel(gumbel_noise, logits, batch_size, gamma + 1, noise_seeds)
+    uniform_weights = resolve_uniform(uniform_noise, logits, batch_size, gamma, noise_seeds)
 
     # Resolve output buffer(s).
 
@@ -308,10 +335,16 @@ def fused_multistep(
     stride_x = collapse_2d(logits).stride(0)
     stride_y = bitpacked.stride(0)
 
-    stride_n = gumbel_weights.stride(0)
-    stride_u = uniform_weights.stride(0)
+    stride_n = conditional_stride(gumbel_weights)
+    stride_u = conditional_stride(uniform_weights)
 
-    stride_c = collapse_2d(gumbel_weights).stride(0)
+    stride_c = resolve_target_stride(
+        gumbel_weights,
+        draft_probabilities,
+        decode_counts,
+        logit_bias,
+        world_size * shard_size,
+    )
 
     # Conditionally resolve optional tensor stride(s).
 
@@ -426,6 +459,8 @@ def fused_multistep(
         draft_probabilities,
         uniform_weights,
         gumbel_weights,
+        noise_seeds,
+        noise_offsets,
         decode_counts,
         top_k_logprobs,
         # Output Data Pointer(s).

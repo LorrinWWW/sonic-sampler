@@ -23,6 +23,9 @@ from triton.language.extra.libdevice import fast_expf, fast_logf    # noqa.
 
 MAX_K: int = 128
 
+NOISE_FLOOR: tl.constexpr = tl.constexpr(1.0e-7)
+NOISE_STRIDE: tl.constexpr = tl.constexpr(256)
+
 
 def next_power_of_2(value: int) -> int:
 
@@ -55,6 +58,62 @@ def gdc_launch_dependents():
         is_pure=False,
         pack=1,
     )
+
+
+@jit
+def philox_key(h_ptr, l_ptr, batch_id, step):
+
+    # Key the stream by the slot's seed and offset, so draws advance with the request only.
+
+    seed = tl.load(h_ptr + batch_id).to(tl.int64)
+    offset = tl.load(l_ptr + batch_id).to(tl.int64)
+
+    lo, hi, _, _ = tl.randint4x(seed, offset * NOISE_STRIDE + step)
+
+    return (hi.to(tl.int64) << 32) | lo.to(tl.int64)
+
+
+@jit
+def philox_gumbel(key, indices):
+
+    # Draw one Philox round per group of four consecutive token indices.
+
+    u0, u1, u2, u3 = tl.rand4x(key, indices // 4)
+
+    lane = indices % 4
+    uniform = tl.where(
+        lane == 0, u0, tl.where(lane == 1, u1, tl.where(lane == 2, u2, u3))
+    )
+
+    return tl.log(-tl.log(tl.maximum(uniform, NOISE_FLOOR)))
+
+
+@jit
+def philox_uniform(
+    h_ptr,
+    l_ptr,
+    batch_id,
+    span,
+    mask,
+    counter,
+    block_g: tl.constexpr,
+):
+
+    tl.static_assert(block_g <= NOISE_STRIDE)
+
+    uniform = tl.zeros((block_g,), dtype=tl.float32)
+
+    for step in tl.static_range(block_g):
+
+        # Draw each step's coin in (0, 1] past the counters its gumbel noise consumes.
+
+        key = philox_key(h_ptr, l_ptr, batch_id, step)
+        coin = tl.rand(key, counter + tl.zeros((1,), dtype=tl.int32))
+        coin = tl.maximum(1.0 - coin, NOISE_FLOOR)
+
+        uniform = tl.where(span == step, coin.broadcast_to((block_g,)), uniform)
+
+    return tl.where(mask, uniform, 0.0)
 
 
 @jit

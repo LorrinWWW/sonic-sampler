@@ -24,6 +24,8 @@ from sonic_sampler.ops.base import (
     gdc_launch_dependents,
     gdc_wait,
     log_softmax,
+    philox_gumbel,
+    philox_key,
     to_scalar,
 )
 from sonic_sampler.ops.topk.unpack import unpack_top_k
@@ -160,6 +162,8 @@ def cumulative_selection_kernel(
     m_ptr,                              # D2T Mapping -> [ V_d ].
     d_ptr,                              # Decode Counts -> [ B, V_t ].
     g_ptr,                              # Gumbel Noise -> [ B, V_t ].
+    h_ptr,                              # Noise Seeds -> [ B ].
+    l_ptr,                              # Noise Offsets -> [ B ].
     k_ptr,                              # Top-K -> [ B ].
     p_ptr,                              # Top-P -> [ B ].
     n_ptr,                              # Min-P -> [ B ].
@@ -306,7 +310,16 @@ def cumulative_selection_kernel(
 
             indices = tl.load(m_ptr + indices)
 
-        noise = tl.load(g_ptr + (batch_id * stride_g) + indices)
+        if g_ptr is not None:
+
+            noise = tl.load(g_ptr + (batch_id * stride_g) + indices)
+
+        else:
+
+            # Draw the gumbel noise in-kernel at the unpacked subset.
+
+            key = philox_key(h_ptr, l_ptr, batch_id, 0)
+            noise = philox_gumbel(key, indices)
 
         selected = tl.argmax(values - noise, axis=0, keep_dims=True)
         token_id = to_scalar(tl.gather(indices, selected, axis=0))
