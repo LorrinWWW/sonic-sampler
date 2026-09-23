@@ -201,7 +201,7 @@ def resolve_indices(
     s_ptr,
     row_id,
     lookahead: tl.constexpr,
-    batch_size: tl.constexpr,
+    batch_size: tl.int32,
     slotted: tl.constexpr,
     singular: tl.constexpr,
     varlen: tl.constexpr,
@@ -294,7 +294,7 @@ def bitpacked_reduction_kernel(
     lookahead: tl.constexpr,            # Maximum Lookahead -> γ.
     max_k: tl.constexpr,                # Maximum Top-K Value -> M.
     scale: tl.constexpr,                # Power-of-2 Integer Scale Factor.
-    batch_size: tl.constexpr,           # Total Sequences -> B.
+    batch_size: tl.int32,               # Total Sequences -> B.
     # Conditional Flag(s).
     indirection: tl.constexpr,          # Vocab Indirection Flag.
     tokens: tl.constexpr,               # Drafted / Decoded Tokens Flag.

@@ -35,7 +35,7 @@ def resolve_indices(
     f_ptr,
     row_id,
     lookahead: tl.constexpr,
-    batch_size: tl.constexpr,
+    batch_size: tl.int32,
     slotted: tl.constexpr,
     varlen: tl.constexpr,
     block_q: tl.constexpr,
@@ -93,7 +93,7 @@ def cumulative_unpack_kernel(
     lookahead: tl.constexpr,            # Lookahead -> γ.
     max_k: tl.constexpr,                # Maximum Top-K Value -> M.
     scale: tl.constexpr,                # Reciprocal of  Power-of-2 Integer Scale Factor.
-    batch_size: tl.constexpr,           # Total Sequences -> B.
+    batch_size: tl.int32,               # Total Sequences -> B.
     total_rows: tl.constexpr,           # Total (Sharded) Logical Vocab Blocks -> W • Z_v'.
     total_cols: tl.constexpr,           # Total Logical Bit-Packed Columns -> W • Z_v' • M.
     # Conditional Flag(s).
