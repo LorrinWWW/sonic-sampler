@@ -19,7 +19,14 @@ from __future__ import annotations
 from triton import jit, language as tl                   # noqa.
 from triton.language.extra.libdevice import fast_logf    # noqa.
 
-from sonic_sampler.ops.base import gdc_launch_dependents, gdc_wait, ones_like
+from sonic_sampler.ops.base import (
+    gdc_launch_dependents,
+    gdc_wait,
+    ones_like,
+    philox_gumbel,
+    philox_key,
+    philox_uniform,
+)
 
 
 @jit
@@ -114,6 +121,8 @@ def load_targets(
 def verify_drafted(
     d_ptr,
     u_ptr,
+    h_ptr,
+    l_ptr,
     batch_id,
     indicator,
     span,
@@ -121,6 +130,7 @@ def verify_drafted(
     probabilities,
     indices,
     mask,
+    block_g: tl.constexpr,
     stride_c: tl.constexpr,
     stride_d: tl.constexpr,
     stride_u: tl.constexpr,
@@ -131,9 +141,23 @@ def verify_drafted(
     matches = (indices == drafted[:, None])
     targets = tl.sum(probabilities * matches, axis=1)
 
-    # Load the uniform random values.
+    # Load or draw the uniform random values.
 
-    uniform = tl.load(u_ptr + (batch_id * stride_u) + span, mask=mask, other=0)
+    if u_ptr is not None:
+
+        uniform = tl.load(u_ptr + (batch_id * stride_u) + span, mask=mask, other=0)
+
+    else:
+
+        uniform = philox_uniform(
+            h_ptr,
+            l_ptr,
+            batch_id,
+            span,
+            mask,
+            stride_c,
+            block_g,
+        )
 
     if d_ptr is not None and (indicator & 0x800) == 0:
 
@@ -158,6 +182,8 @@ def verify_drafted(
 def rejection_sample(
     d_ptr,
     e_ptr,
+    h_ptr,
+    l_ptr,
     batch_id,
     timesteps,
     indicator,
@@ -191,10 +217,18 @@ def rejection_sample(
         .reshape((max_k,))
     )
 
-    # Load the gumbel noise for the corresponding position(s).
+    # Load or draw the gumbel noise for the corresponding position(s).
 
     shifts = (accepted * stride_c) + positions
-    gumbel = tl.load(e_ptr + (batch_id * stride_e) + shifts)
+
+    if e_ptr is not None:
+
+        gumbel = tl.load(e_ptr + (batch_id * stride_e) + shifts)
+
+    else:
+
+        key = philox_key(h_ptr, l_ptr, batch_id, accepted)
+        gumbel = philox_gumbel(key, positions)
 
     if accepted == (timesteps - 1):
 
@@ -253,6 +287,8 @@ def chain_speculative_verification_kernel(
     d_ptr,                              # Draft Probabilities -> [ B, γ, V ].
     u_ptr,                              # Uniform -> [ B, γ ].
     e_ptr,                              # Gumbel Noise -> [ B • (γ + 1), V ].
+    h_ptr,                              # Noise Seeds -> [ B ].
+    l_ptr,                              # Noise Offsets -> [ B ].
     c_ptr,                              # Decode Counts -> [ B, V ].
     r_ptr,                              # Top-K Log-Probabilities -> [ B ].
     # Output Data Pointer(s).
@@ -343,6 +379,8 @@ def chain_speculative_verification_kernel(
         accepted, targets, matches = verify_drafted(
             d_ptr,
             u_ptr,
+            h_ptr,
+            l_ptr,
             batch_id,
             indicator,
             span,
@@ -350,6 +388,7 @@ def chain_speculative_verification_kernel(
             probabilities,
             indices,
             draft_mask,
+            block_g,
             stride_c,
             stride_d,
             stride_u,
@@ -360,6 +399,8 @@ def chain_speculative_verification_kernel(
         token, targets, selections = rejection_sample(
             d_ptr,
             e_ptr,
+            h_ptr,
+            l_ptr,
             batch_id,
             timesteps,
             indicator,

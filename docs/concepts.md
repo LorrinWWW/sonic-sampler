@@ -153,6 +153,15 @@ into the target weights before the next verification. Slot-based integrations ge
 argument of `update(...)`. Under stochastic verification with greedy drafting there is nothing to
 carry over, and the target weights are simply refreshed.
 
+### In-kernel noise
+
+Given `noise_seeds` and `noise_offsets` instead of the weights, the functional entry points draw the
+noise inside the kernels, only at the candidates they read. Each row keys a Philox stream by its
+seed and the counter `offset * 256 + timestep`, so an offset that grows every step, such as the
+sequence length, gives fresh noise for any lookahead below 256. The noise equals a `float32` weight
+buffer written with Philox over the same key, four tokens per round. A stochastic drafter's noise is
+not carried into the verifier, so draft-coupled verification still requires the weights.
+
 ## Scoped indicators
 
 Per-request behaviour is encoded as an `Indicator`, a bitfield whose bits activate the logit

@@ -426,9 +426,12 @@ The functional entry points take every buffer explicitly. Their arguments group 
 | Modes | `enable_pdl`, `is_prefill`, `update_counts`, `return_logprobs`, `return_probabilities`, `lookahead` |
 | Tiling | `block_n`, `scratchpad`, `values`, `indices`, `topk_strategy`, `warp_config` |
 | Manipulators | `slot_mapping`, `d2t_mapping`, `grammar`, `context_counts`, `decode_counts`, `repetition_penalties`, `frequency_penalties`, `presence_penalties`, `logit_bias`, `temperature`, `top_k`, `top_p`, `min_p`, `top_k_logprobs` |
-| Weights | `gumbel_noise`, `uniform_noise` |
+| Weights | `gumbel_noise`, `uniform_noise`, `noise_seeds`, `noise_offsets` |
 | Outputs | `output_tokens`, `draft_probabilities` |
 
 Any buffer left `None` is allocated inside the call, which is convenient for one-off use and
 incompatible with graph capture. Every manipulator is independently optional: omitting one leaves
 the corresponding stage inactive regardless of the indicator bits.
+
+With `noise_seeds` and `noise_offsets`, per-slot integer tensors, the noise weights must be `None`
+and the kernels draw the noise instead, see [In-kernel noise](concepts.md#in-kernel-noise).
